@@ -5,9 +5,11 @@ const $root = require('../proto/message.js');
 const { v4: uuidv4, v5: uuidv5 } = require('uuid');
 const { generateCursorBody, chunkToUtf8String, generateHashed64Hex, generateCursorChecksum } = require('../utils/utils.js');
 const keyManager = require('../utils/keyManager.js');
+const cookieRefresher = require('../utils/cookieRefresher.js');
 const { spawn } = require('child_process');
 const path = require('path');
 const admin = require('../models/admin');
+const config = require('../config/config');
 
 // 存储刷新状态的变量
 let refreshStatus = {
@@ -338,6 +340,122 @@ router.get("/models", async (req, res) => {
   }
 })
 
+// 获取cookie自动获取配置
+router.get("/auto-fetch-config", async (req, res) => {
+  try {
+    return res.json({
+      success: true,
+      config: {
+        enabled: config.autoFetch.enabled,
+        threshold: config.autoFetch.threshold
+      }
+    });
+  } catch (error) {
+    console.error('获取cookie自动获取配置失败:', error);
+    return res.status(500).json({
+      error: 'Internal server error',
+      message: error.message
+    });
+  }
+});
+
+// 获取cookie轮换策略配置
+router.get("/rotation-strategy", async (req, res) => {
+  try {
+    return res.json({
+      success: true,
+      strategy: config.defaultRotationStrategy
+    });
+  } catch (error) {
+    console.error('获取cookie轮换策略失败:', error);
+    return res.status(500).json({
+      error: 'Internal server error',
+      message: error.message
+    });
+  }
+});
+
+// 更新cookie轮换策略配置
+router.post("/rotation-strategy", async (req, res) => {
+  try {
+    const { strategy } = req.body;
+    
+    // 验证策略值
+    const validStrategies = ['round-robin', 'random', 'health-first'];
+    if (!validStrategies.includes(strategy)) {
+      return res.status(400).json({
+        success: false,
+        message: '无效的策略值，有效值为: round-robin, random, health-first'
+      });
+    }
+    
+    // 更新内存中的配置
+    config.defaultRotationStrategy = strategy;
+    
+    // 在生产环境中，你可能需要将这些配置持久化到文件或数据库中
+    // 此处简化处理，仅更新内存中的配置
+    
+    console.log(`已更新cookie轮换策略: ${strategy}`);
+    
+    return res.json({
+      success: true,
+      message: '策略已更新',
+      strategy
+    });
+  } catch (error) {
+    console.error('更新cookie轮换策略失败:', error);
+    return res.status(500).json({
+      error: 'Internal server error',
+      message: error.message
+    });
+  }
+});
+
+// 更新cookie自动获取配置
+router.post("/auto-fetch-config", async (req, res) => {
+  try {
+    const { enabled, threshold } = req.body;
+    
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({
+        success: false,
+        message: 'enabled必须是布尔值'
+      });
+    }
+    
+    if (typeof threshold !== 'number' || threshold < 0 || threshold > 10) {
+      return res.status(400).json({
+        success: false,
+        message: 'threshold必须是0-10之间的数字'
+      });
+    }
+    
+    // 更新内存中的配置
+    config.autoFetch.enabled = enabled;
+    config.autoFetch.threshold = threshold;
+    
+    // 在生产环境中，你可能需要将这些配置持久化到文件或数据库中
+    // 此处简化处理，仅更新内存中的配置
+    
+    console.log(`已更新cookie自动获取配置: enabled=${enabled}, threshold=${threshold}`);
+    
+    return res.json({
+      success: true,
+      message: '配置已更新',
+      config: {
+        enabled,
+        threshold
+      }
+    });
+  } catch (error) {
+    console.error('更新cookie自动获取配置失败:', error);
+    return res.status(500).json({
+      error: 'Internal server error',
+      message: error.message
+    });
+  }
+});
+
 router.post('/chat/completions', async (req, res) => {
   // o1开头的模型，不支持流式输出
   if (req.body.model.startsWith('o1-') && req.body.stream) {
@@ -350,9 +468,46 @@ router.post('/chat/completions', async (req, res) => {
     const { model, messages, stream = false } = req.body;
     let bearerToken = req.headers.authorization?.replace('Bearer ', '');
     
+    // 获取cookie数量
+    const cookieCount = keyManager.getAllCookiesForApiKey(bearerToken).length;
+    const threshold = config.autoFetch.threshold;
+    
+    // 根据配置检查是否需要自动获取cookie
+    if (config.autoFetch.enabled && cookieCount < threshold && cookieCount > 0) {
+      // 如果有cookie但数量低于阈值，在后台异步获取新cookie，不阻塞当前请求
+      console.log(`检测到API Key ${bearerToken} 的cookie数量(${cookieCount})低于阈值(${threshold})，在后台异步获取...`);
+      
+      // 使用setTimeout创建异步任务，不阻塞主请求流程
+      setTimeout(async () => {
+        try {
+          const refreshResult = await cookieRefresher.autoRefreshCookies(bearerToken, threshold);
+          if (refreshResult.success) {
+            console.log(`后台成功为API Key ${bearerToken} 自动获取了 ${refreshResult.refreshed} 个cookie`);
+          } else {
+            console.error(`后台自动获取cookie失败: ${refreshResult.message}`);
+          }
+        } catch (refreshError) {
+          console.error(`后台尝试自动获取cookie失败: ${refreshError.message}`);
+        }
+      }, 0);
+    } else if (config.autoFetch.enabled && cookieCount === 0) {
+      // 如果没有可用cookie，必须等待获取
+      console.log(`检测到API Key ${bearerToken} 没有可用cookie，尝试同步获取...`);
+      try {
+        const refreshResult = await cookieRefresher.autoRefreshCookies(bearerToken, threshold);
+        if (refreshResult.success) {
+          console.log(`成功为API Key ${bearerToken} 自动获取了 ${refreshResult.refreshed} 个cookie`);
+        } else {
+          console.error(`自动获取cookie失败: ${refreshResult.message}`);
+        }
+      } catch (refreshError) {
+        console.error(`尝试自动获取cookie失败: ${refreshError.message}`);
+      }
+    }
+    
     // 使用keyManager获取实际的cookie
-    let authToken = keyManager.getCookieForApiKey(bearerToken);
-    // 保存原始cookie，用于后续可能的错误处理
+    let authToken = keyManager.getCookieForApiKey(bearerToken, 'health-first'); // 使用健康优先策略
+    // 保存原始cookie，用于后续可能的错误处理和健康状态更新
     const originalAuthToken = authToken;
     //console.log('原始cookie:', originalAuthToken);
 
@@ -474,28 +629,49 @@ router.post('/chat/completions', async (req, res) => {
                 errorMessage = `错误：Cookie无效或已过期，请更新Cookie。\n\n详细信息：${text.error}`;
               }
               isCookieError = true;
+              
+              // 更新cookie健康状态
+              keyManager.updateCookieHealth(bearerToken, originalAuthToken, false);
             } else if (errorStr.includes('You\'ve reached your trial request limit')) {
               console.error('检测到额度用尽cookie:', originalAuthToken);
               errorMessage = `错误：Cookie使用额度已用完，请更换Cookie或等待刷新。\n\n详细信息：${text.error}`;
               isCookieError = true;
+              
+              // 更新cookie健康状态
+              keyManager.updateCookieHealth(bearerToken, originalAuthToken, false);
             } else if (errorStr.includes('User is unauthorized')) {
               console.error('检测到未授权cookie:', originalAuthToken);
               errorMessage = `错误：Cookie已被封禁或失效，请更换Cookie。\n\n详细信息：${text.error}`;
               isCookieError = true;
+              
+              // 更新cookie健康状态
+              keyManager.updateCookieHealth(bearerToken, originalAuthToken, false);
             } else if (errorStr.includes('suspicious activity checks')) {
               console.error('检测到IP黑名单:', originalAuthToken);
               errorMessage = `错误：IP可能被列入黑名单，请尝试更换网络环境或使用代理。\n\n详细信息：${text.error}`;
+              
+              // 更新cookie健康状态
+              keyManager.updateCookieHealth(bearerToken, originalAuthToken, false);
             } else if (errorStr.includes('Too many computers')) {
               console.error('检测到账户暂时被封禁:', originalAuthToken);
               errorMessage = `错误：账户因在多台设备登录而暂时被封禁，请稍后再试或更换账户。\n\n详细信息：${text.error}`;
               isCookieError = true;
+              
+              // 更新cookie健康状态
+              keyManager.updateCookieHealth(bearerToken, originalAuthToken, false);
             } else if (errorStr.includes('Login expired') || errorStr.includes('login expired')) {
               console.error('检测到登录过期cookie:', originalAuthToken);
               errorMessage = `错误：Cookie登录已过期，请更新Cookie。\n\n详细信息：${text.error}`;
               isCookieError = true;
+              
+              // 更新cookie健康状态
+              keyManager.updateCookieHealth(bearerToken, originalAuthToken, false);
             } else if (isCookieError) {
               console.error('检测到其他无效cookie:', originalAuthToken);
               errorMessage = `错误：Cookie无效，请更换Cookie重试。\n\n详细信息：${text.error}`;
+              
+              // 更新cookie健康状态
+              keyManager.updateCookieHealth(bearerToken, originalAuthToken, false);
             } else {
               // 非Cookie相关错误
               console.error('检测到其他错误:', text.error);
@@ -560,6 +736,9 @@ router.post('/chat/completions', async (req, res) => {
         if (!responseEnded) {
           res.write('data: [DONE]\n\n');
           res.end();
+          
+          // 请求成功完成，更新cookie健康状态为成功
+          keyManager.updateCookieHealth(bearerToken, originalAuthToken, true);
         }
       } catch (streamError) {
         console.error('Stream error:', streamError);

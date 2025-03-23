@@ -19,7 +19,7 @@ try {
 module.exports = {
     port: process.env.PORT || 3010,
     apiKeys: apiKeysConfig,
-    defaultRotationStrategy: process.env.ROTATION_STRATEGY || 'round-robin',
+    defaultRotationStrategy: process.env.ROTATION_STRATEGY || 'health-first',
     
     // GitHub相关配置
     github: {
@@ -46,5 +46,13 @@ module.exports = {
         cron: process.env.REFRESH_CRON || '0 */6 * * *',
         minCookieCount: parseInt(process.env.MIN_COOKIE_COUNT || '2', 10),
         enabled: process.env.ENABLE_AUTO_REFRESH === 'true'
+    },
+    
+    // Cookie自动获取配置
+    autoFetch: {
+        // API Key的cookie数量为0时自动获取cookie
+        enabled: process.env.ENABLE_AUTO_FETCH_COOKIE !== 'false', // 默认启用
+        // 当cookie数量低于此值时自动获取新cookie
+        threshold: parseInt(process.env.AUTO_FETCH_THRESHOLD || '2', 10)
     }
 };

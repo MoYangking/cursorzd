@@ -29,6 +29,9 @@ let rotationIndexes = new Map();
 // 存储被标记为无效的cookie
 let invalidCookies = new Set();
 
+// 存储cookie的健康状态
+let cookieHealthStatus = {};
+
 // 从文件加载无效cookie
 function loadInvalidCookiesFromFile() {
   ensureDataDirExists();
@@ -273,37 +276,76 @@ function removeApiKey(apiKey) {
     saveApiKeysToFile();
 }
 
-// 获取API key对应的cookie值（根据轮询策略）
-function getCookieForApiKey(apiKey, strategy = config.defaultRotationStrategy) {
-    // 如果API key不存在，则直接返回API key本身（向后兼容）
-    if (!apiKeyMap.has(apiKey)) {
-      return apiKey;
-    }
+// 检查API Key是否没有可用cookie
+function hasNoCookies(apiKey) {
+    loadApiKeysFromFile(); // 确保获取最新数据
     const cookies = apiKeyMap.get(apiKey);
-    
-    if (!cookies || cookies.length === 0) {
+    return !cookies || cookies.length === 0;
+}
+
+// 根据指定策略为API Key选择cookie
+function getCookieForApiKey(apiKey, strategy = config.defaultRotationStrategy) {
+    // 首先检查API Key是否存在
+    if (!apiKeyMap.has(apiKey)) {
+        // 如果API Key不存在，则使用API Key自身作为"cookie"（向后兼容模式）
+        console.warn(`API Key "${apiKey}"没有关联的cookie，使用API Key自身作为cookie`);
         return apiKey;
     }
     
-    if (cookies.length === 1) {
-        return cookies[0];
+    // 获取该API Key的所有cookie
+    const cookies = apiKeyMap.get(apiKey);
+    
+    // 如果没有cookie，返回API Key自身
+    if (!cookies || cookies.length === 0) {
+        console.warn(`API Key "${apiKey}"没有可用cookie，使用API Key自身作为cookie`);
+        return apiKey;
     }
     
-    // 根据策略选择cookie
-    if (strategy === 'random') {
-        // 随机策略
-        const randomIndex = Math.floor(Math.random() * cookies.length);
-        return cookies[randomIndex];
+    // 定义cookie选择策略
+    const strategies = {
+        // 轮询策略：按顺序循环使用cookie
+        'round-robin': () => {
+            // 更新并获取当前的索引
+            let currentIndex = rotationIndexes.get(apiKey) || 0;
+            const cookie = cookies[currentIndex];
+            
+            // 更新索引
+            currentIndex = (currentIndex + 1) % cookies.length;
+            rotationIndexes.set(apiKey, currentIndex);
+            
+            return cookie;
+        },
+        // 随机策略：随机选择一个cookie
+        'random': () => {
+            const randomIndex = Math.floor(Math.random() * cookies.length);
+            return cookies[randomIndex];
+        },
+        // 健康优先策略：优先选择高质量的cookie
+        'health-first': () => {
+            // 如果没有历史记录，使用轮询策略
+            if (!cookieHealthStatus[apiKey]) {
+                cookieHealthStatus[apiKey] = {};
+                return strategies['round-robin']();
+            }
+            
+            // 按健康状况排序cookie
+            const sortedCookies = [...cookies].sort((a, b) => {
+                const aScore = cookieHealthStatus[apiKey][a] || 0;
+                const bScore = cookieHealthStatus[apiKey][b] || 0;
+                return bScore - aScore; // 健康分数高的排在前面
+            });
+            
+            // 返回最健康的cookie
+            return sortedCookies[0];
+        }
+    };
+    
+    // 使用指定的策略或默认策略选择cookie
+    if (strategies[strategy]) {
+        return strategies[strategy]();
     } else {
-        // 轮询策略（round-robin）
-        let currentIndex = rotationIndexes.get(apiKey) || 0;
-        const cookie = cookies[currentIndex];
-        
-        // 更新索引
-        currentIndex = (currentIndex + 1) % cookies.length;
-        rotationIndexes.set(apiKey, currentIndex);
-        
-        return cookie;
+        console.warn(`未知的cookie轮换策略: ${strategy}，使用round-robin策略`);
+        return strategies['round-robin']();
     }
 }
 
@@ -396,6 +438,32 @@ function clearAllInvalidCookies() {
     return true;
 }
 
+// 添加cookie健康状态记录功能
+function updateCookieHealth(apiKey, cookie, isSuccess) {
+    // 初始化API Key的健康状态记录
+    if (!cookieHealthStatus[apiKey]) {
+        cookieHealthStatus[apiKey] = {};
+    }
+    
+    // 初始化cookie的健康分数
+    if (cookieHealthStatus[apiKey][cookie] === undefined) {
+        cookieHealthStatus[apiKey][cookie] = 100; // 默认初始健康分数为100
+    }
+    
+    // 根据请求结果更新健康分数
+    if (isSuccess) {
+        // 成功请求，健康分数增加，但最大不超过100
+        cookieHealthStatus[apiKey][cookie] = Math.min(100, cookieHealthStatus[apiKey][cookie] + 10);
+    } else {
+        // 失败请求，健康分数降低，但最小不低于0
+        cookieHealthStatus[apiKey][cookie] = Math.max(0, cookieHealthStatus[apiKey][cookie] - 30);
+    }
+    
+    console.log(`更新Cookie健康状态: API Key=${apiKey}, Cookie=${cookie.substring(0, 15)}..., 成功=${isSuccess}, 健康分数=${cookieHealthStatus[apiKey][cookie]}`);
+    
+    return cookieHealthStatus[apiKey][cookie];
+}
+
 module.exports = {
     addOrUpdateApiKey,
     removeApiKey,
@@ -410,5 +478,7 @@ module.exports = {
     loadInvalidCookiesFromFile,
     saveInvalidCookiesToFile,
     loadApiKeysFromFile,
-    saveApiKeysToFile
+    saveApiKeysToFile,
+    hasNoCookies,
+    updateCookieHealth
 }; 

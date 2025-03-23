@@ -36,12 +36,27 @@
             margin-bottom: 5px;
             font-weight: bold;
         }
-        input, textarea {
+        input, textarea, select {
             width: 100%;
             padding: 8px;
             border: 1px solid #ddd;
             border-radius: 4px;
             font-size: 16px;
+        }
+        input[type="checkbox"] {
+            width: auto;
+            margin-right: 5px;
+        }
+        input[type="number"] {
+            width: 100px;
+        }
+        .checkbox-container {
+            display: flex;
+            align-items: center;
+        }
+        .checkbox-label {
+            display: inline;
+            margin-left: 5px;
         }
         textarea {
             min-height: 100px;
@@ -84,6 +99,13 @@
         }
         .edit-btn:hover {
             background: #d35400;
+        }
+        .refresh-btn {
+            background: #27ae60;
+            margin-right: 5px;
+        }
+        .refresh-btn:hover {
+            background: #219653;
         }
         .info {
             background-color: #d4edda;
@@ -136,6 +158,13 @@
             max-width: 80%;
             word-break: break-all;
         }
+        .cookie-warning {
+            color: #ffa500;
+        }
+        .cookie-warning-text {
+            font-size: 0.8em;
+            font-weight: normal;
+        }
     </style>
 </head>
 <body>
@@ -175,6 +204,10 @@
         <div class="card">
             <h2>现有 API Key</h2>
             <div id="keyListMessage"></div>
+            <div class="info">
+                <p><strong>注意：</strong>系统将自动检测并处理cookie数量为0的API Key。当检测到API Key没有可用cookie时，系统会尝试自动获取新cookie。</p>
+                <p>您也可以手动点击下方的"刷新Cookie"按钮主动获取。</p>
+            </div>
             <table id="keyTable">
                 <thead>
                     <tr>
@@ -242,27 +275,89 @@
         <h2>Cookie自动刷新</h2>
         <div class="form-group">
             <div class="info">
-                系统支持自动刷新Cookie，确保API Key始终有足够的可用Cookie。您可以在此手动触发刷新操作。
+                <p>系统支持自动刷新Cookie，确保API Key始终有足够的可用Cookie。您可以在此手动触发刷新操作。</p>
+                <p><strong>自动获取说明：</strong></p>
+                <ul>
+                    <li>当检测到API Key没有可用cookie时，系统会在请求时自动尝试获取</li>
+                    <li>自动获取过程需要几分钟时间，期间请求可能会失败</li>
+                    <li>获取成功后，后续请求将自动使用新cookie</li>
+                    <li>如需立即使用，您可以手动点击下方的"刷新Cookie"按钮</li>
+                </ul>
             </div>
             <div id="refreshCookieMessage"></div>
             <div style="margin-top: 15px;">
                 <div class="form-group">
                     <label for="refreshApiKey">选择要刷新的API Key（不选则刷新所有）</label>
-                    <select id="refreshApiKey" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 16px;">
+                    <select id="refreshApiKey">
                         <option value="">所有API Key</option>
-                        <!-- 选项将通过JavaScript动态加载 -->
                     </select>
                 </div>
-                <button id="refreshCookieBtn" style="background: #27ae60;">刷新Cookie</button>
+                <button id="refreshCookieBtn">刷新Cookie</button>
             </div>
-            <div id="refreshStatusContainer" style="margin-top: 15px; display: none;">
-                <div class="info">
-                    <div>刷新状态：<span id="refreshStatus">准备中...</span></div>
-                    <div style="margin-top: 10px;">
-                        <progress id="refreshProgress" value="0" max="100" style="width: 100%;"></progress>
+            <div id="refreshStatusContainer" style="display: none; margin-top: 15px;">
+                <div style="margin-bottom: 10px;" id="refreshStatus">处理中...</div>
+                <progress id="refreshProgress" value="0" max="100" style="width: 100%;"></progress>
+            </div>
+        </div>
+    </div>
+
+    <!-- 新增：Cookie自动获取配置 -->
+    <div class="card">
+        <h2>Cookie自动获取设置</h2>
+        <div class="form-group">
+            <div class="info">
+                <p>您可以在此设置Cookie自动获取的阈值。当API Key的cookie数量低于该阈值时，系统会自动尝试获取新cookie。</p>
+                <p><strong>自动获取行为说明：</strong></p>
+                <ul>
+                    <li>当cookie数量<strong>低于阈值但大于0</strong>时：系统会在<strong>后台异步获取</strong>新cookie，不影响当前请求的处理</li>
+                    <li>当cookie数量<strong>等于0</strong>时：系统必须等待同步获取新cookie，可能导致请求延迟</li>
+                    <li>建议将阈值设置为2或更高，以保证系统有足够的缓冲来处理请求</li>
+                </ul>
+            </div>
+            <div id="autoFetchConfigMessage"></div>
+            <form id="autoFetchConfigForm">
+                <div class="form-group checkbox-container">
+                    <input type="checkbox" id="autoFetchEnabled" checked>
+                    <label for="autoFetchEnabled" class="checkbox-label">启用自动获取</label>
+                </div>
+                <div class="form-group">
+                    <label for="autoFetchThreshold">自动获取阈值</label>
+                    <div style="display: flex; align-items: center;">
+                        <input type="number" id="autoFetchThreshold" min="0" max="10" value="2" style="width: 80px;">
+                        <span style="margin-left: 10px;">当API Key的cookie数量低于此值时，系统会自动获取新cookie</span>
                     </div>
                 </div>
+                <button type="submit">保存设置</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- 新增：Cookie轮换策略配置 -->
+    <div class="card">
+        <h2>Cookie轮换策略设置</h2>
+        <div class="form-group">
+            <div class="info">
+                <p>您可以在此设置系统使用Cookie的策略。不同策略会影响系统如何选择使用API Key的Cookie。</p>
+                <p><strong>可用策略说明：</strong></p>
+                <ul>
+                    <li><strong>轮询策略 (round-robin)</strong>：按顺序循环使用Cookie，确保每个Cookie都被均匀使用</li>
+                    <li><strong>随机策略 (random)</strong>：随机选择一个Cookie使用，可能导致某些Cookie使用频率较高</li>
+                    <li><strong>健康优先 (health-first)</strong>：优先使用历史表现更好的Cookie，系统会自动记录并学习每个Cookie的成功率</li>
+                </ul>
+                <p><strong>建议：</strong>健康优先策略可以自动避开问题Cookie，提高请求成功率</p>
             </div>
+            <div id="rotationStrategyMessage"></div>
+            <form id="rotationStrategyForm">
+                <div class="form-group">
+                    <label for="rotationStrategy">选择Cookie轮换策略</label>
+                    <select id="rotationStrategy" style="width: 200px;">
+                        <option value="health-first">健康优先 (health-first)</option>
+                        <option value="round-robin">轮询策略 (round-robin)</option>
+                        <option value="random">随机策略 (random)</option>
+                    </select>
+                </div>
+                <button type="submit">保存策略</button>
+            </form>
         </div>
     </div>
 
@@ -303,24 +398,10 @@
                 const data = await response.json();
                 console.log('获取到的数据:', data);
                 
-                const keyList = document.getElementById('keyList');
-                keyList.innerHTML = '';
-                
-                if (data.success && data.apiKeys.length > 0) {
-                    data.apiKeys.forEach(key => {
-                        const row = document.createElement('tr');
-                        row.innerHTML = `
-                            <td>${key.key}</td>
-                            <td>${key.cookieCount}</td>
-                            <td>
-                                <button class="edit-btn" onclick="editApiKey('${key.key}')">修改</button>
-                                <button class="action-btn" onclick="deleteApiKey('${key.key}')">删除</button>
-                            </td>
-                        `;
-                        keyList.appendChild(row);
-                    });
+                if (data.success) {
+                    renderApiKeyList(data.apiKeys);
                 } else {
-                    keyList.innerHTML = '<tr><td colspan="3">暂无 API Key</td></tr>';
+                    document.getElementById('keyList').innerHTML = '<tr><td colspan="3">加载失败</td></tr>';
                 }
             } catch (error) {
                 console.error('加载 API Key 失败:', error);
@@ -579,6 +660,48 @@
             }
         }
 
+        // 渲染API Key列表
+        function renderApiKeyList(apiKeys) {
+            const keyList = document.getElementById('keyList');
+            keyList.innerHTML = '';
+            
+            if (apiKeys && apiKeys.length > 0) {
+                apiKeys.forEach(key => {
+                    const row = document.createElement('tr');
+                    
+                    // 获取当前的自动获取阈值
+                    const threshold = document.getElementById('autoFetchThreshold').value || 2;
+                    
+                    // 如果cookie数量小于阈值，添加警告样式和警告提示
+                    const cookieCountClass = key.cookieCount < threshold ? 'class="cookie-warning"' : '';
+                    const cookieCountWarning = key.cookieCount < threshold ? 
+                        ` <span class="cookie-warning-text">(低于阈值${threshold}，系统将自动获取)</span>` : '';
+                    
+                    // 创建操作按钮
+                    let actionsHTML = `
+                        <button class="edit-btn" onclick="editApiKey('${key.key}')">修改</button>
+                        <button class="action-btn" onclick="deleteApiKey('${key.key}')">删除</button>
+                    `;
+                    
+                    // 如果cookie数量小于阈值，添加立即获取按钮
+                    if (key.cookieCount < threshold) {
+                        actionsHTML += `
+                            <button class="refresh-btn" onclick="refreshSingleApiKey('${key.key}')">立即获取</button>
+                        `;
+                    }
+                    
+                    row.innerHTML = `
+                        <td>${key.key}</td>
+                        <td ${cookieCountClass}>${key.cookieCount}${cookieCountWarning}</td>
+                        <td>${actionsHTML}</td>
+                    `;
+                    keyList.appendChild(row);
+                });
+            } else {
+                keyList.innerHTML = '<tr><td colspan="3">暂无 API Key</td></tr>';
+            }
+        }
+
         // 获取无效Cookie列表
         async function getInvalidCookies() {
             try {
@@ -718,6 +841,8 @@
             loadApiKeys();
             renderInvalidCookies();
             populateRefreshApiKeySelect();
+            loadAutoFetchConfig(); // 加载自动获取配置
+            loadRotationStrategy(); // 加载轮换策略配置
             
             // 添加定时刷新功能，每60秒刷新一次API Key列表和无效Cookie列表
             setInterval(() => {
@@ -773,6 +898,52 @@
             
             const data = await response.json();
             return data.success ? data.apiKeys : [];
+        }
+
+        // 为单个API Key刷新Cookie
+        async function refreshSingleApiKey(apiKey) {
+            try {
+                if (!confirm(`确定要为API Key "${apiKey}" 获取新Cookie吗？此过程可能需要几分钟时间。`)) {
+                    return;
+                }
+                
+                document.getElementById('keyListMessage').innerHTML = `
+                    <div class="info">正在为API Key "${apiKey}" 获取新Cookie，请稍候...</div>
+                `;
+                
+                // 调用刷新API
+                const response = await fetch(`/v1/refresh-cookies?apiKey=${encodeURIComponent(apiKey)}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Cache-Control': 'no-cache'
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP错误: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('keyListMessage').innerHTML = `
+                        <div class="info">已开始为API Key "${apiKey}" 获取新Cookie，此过程将在后台运行，可能需要2-12分钟。请稍后刷新页面查看结果。</div>
+                    `;
+                    
+                    // 1分钟后自动刷新API Key列表
+                    setTimeout(() => {
+                        refreshApiKeyList();
+                    }, 60000);
+                } else {
+                    throw new Error(data.message || '未知错误');
+                }
+            } catch (error) {
+                console.error(`为API Key ${apiKey} 刷新Cookie失败:`, error);
+                document.getElementById('keyListMessage').innerHTML = `
+                    <div class="error">获取Cookie失败: ${error.message}</div>
+                `;
+            }
         }
 
         // 刷新Cookie按钮事件
@@ -895,6 +1066,156 @@
             }
             return originalFetch(url, options);
         };
+
+        // 加载自动获取配置
+        async function loadAutoFetchConfig() {
+            try {
+                const response = await fetch('/v1/auto-fetch-config', {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Cache-Control': 'no-cache'
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP错误: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('autoFetchEnabled').checked = data.config.enabled;
+                    document.getElementById('autoFetchThreshold').value = data.config.threshold;
+                    console.log('已加载自动获取配置:', data.config);
+                }
+            } catch (error) {
+                console.error('加载自动获取配置失败:', error);
+                document.getElementById('autoFetchConfigMessage').innerHTML = `
+                    <div class="error">加载配置失败: ${error.message}</div>
+                `;
+            }
+        }
+
+        // 提交自动获取配置表单
+        document.getElementById('autoFetchConfigForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const enabled = document.getElementById('autoFetchEnabled').checked;
+            const threshold = parseInt(document.getElementById('autoFetchThreshold').value);
+            
+            try {
+                const response = await fetch('/v1/auto-fetch-config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        enabled,
+                        threshold
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP错误: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('autoFetchConfigMessage').innerHTML = `
+                        <div class="info">设置已保存: 已${data.config.enabled ? '启用' : '禁用'}自动获取，阈值设为${data.config.threshold}</div>
+                    `;
+                    
+                    // 更新后刷新API Key列表，以更新警告显示
+                    refreshApiKeyList();
+                } else {
+                    throw new Error(data.message || '未知错误');
+                }
+            } catch (error) {
+                console.error('保存自动获取配置失败:', error);
+                document.getElementById('autoFetchConfigMessage').innerHTML = `
+                    <div class="error">保存配置失败: ${error.message}</div>
+                `;
+            }
+        });
+
+        // 加载Cookie轮换策略配置
+        async function loadRotationStrategy() {
+            try {
+                const response = await fetch('/v1/rotation-strategy', {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Cache-Control': 'no-cache'
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP错误: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('rotationStrategy').value = data.strategy;
+                    console.log('已加载Cookie轮换策略:', data.strategy);
+                }
+            } catch (error) {
+                console.error('加载Cookie轮换策略失败:', error);
+                document.getElementById('rotationStrategyMessage').innerHTML = `
+                    <div class="error">加载策略失败: ${error.message}</div>
+                `;
+            }
+        }
+
+        // 提交Cookie轮换策略表单
+        document.getElementById('rotationStrategyForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const strategy = document.getElementById('rotationStrategy').value;
+            
+            try {
+                const response = await fetch('/v1/rotation-strategy', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        strategy
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP错误: ${response.status} ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('rotationStrategyMessage').innerHTML = `
+                        <div class="info">策略已保存: ${getStrategyDisplayName(data.strategy)}</div>
+                    `;
+                } else {
+                    throw new Error(data.message || '未知错误');
+                }
+            } catch (error) {
+                console.error('保存Cookie轮换策略失败:', error);
+                document.getElementById('rotationStrategyMessage').innerHTML = `
+                    <div class="error">保存策略失败: ${error.message}</div>
+                `;
+            }
+        });
+
+        // 获取策略的显示名称
+        function getStrategyDisplayName(strategy) {
+            const strategyMap = {
+                'round-robin': '轮询策略 (round-robin)',
+                'random': '随机策略 (random)',
+                'health-first': '健康优先 (health-first)'
+            };
+            return strategyMap[strategy] || strategy;
+        }
     </script>
 </body>
 </html> 
