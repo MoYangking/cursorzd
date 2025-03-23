@@ -129,6 +129,3 @@ dist
 .yarn/install-state.gz
 .pnp.*
 
-data/admin.json
-data/api_keys.json
-data/invalid_cookies.json
